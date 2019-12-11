@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 1999-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -48,6 +48,37 @@
 #include <string.h>
 #include <unistd.h>
 #include <wipefs.h>
+
+#include <TargetConditionals.h>
+
+#if TARGET_OS_IPHONE
+
+// CoreServices is not available, so...
+
+/*
+ * Mac OS Finder flags
+ */
+enum {
+    kHasBeenInited  = 0x0100,       /* Files only */
+    /* Clear if the file contains desktop database */
+    /* bit 0x0200 was the letter bit for AOCE, but is now reserved for future use */
+    kHasCustomIcon  = 0x0400,       /* Files and folders */
+    kIsStationery   = 0x0800,       /* Files only */
+    kNameLocked     = 0x1000,       /* Files and folders */
+    kHasBundle      = 0x2000,       /* Files only */
+    kIsInvisible    = 0x4000,       /* Files and folders */
+    kIsAlias        = 0x8000        /* Files only */
+};
+
+enum {
+    kTextEncodingMacUnicode		= 0x7E,
+};
+
+#else // !TARGET_OS_IPHONE
+
+#include <CoreServices/CoreServices.h>
+
+#endif // !TARGET_OS_IPHONE
 
 /*
  * CommonCrypto is meant to be a more stable API than OpenSSL.
@@ -144,8 +175,6 @@ static UInt32 UTCToLocal __P((UInt32 utcTime));
 
 static int ConvertUTF8toUnicode __P((const UInt8* source, size_t bufsize,
 		UniChar* unibuf, UInt16 *charcount));
-
-static int getencodinghint(unsigned char *name);
 
 #define VOLUMEUUIDVALUESIZE 2
 typedef union VolumeUUID {
@@ -352,8 +381,6 @@ make_hfsplus(const DriveInfo *driveInfo, hfsparams_t *defaults)
 	if (header == NULL)
 		err(1, NULL);
 
-	defaults->encodingHint = getencodinghint(defaults->volumeName);
-
 	/* VH Initialized in native byte order */
 	InitVH(defaults, driveInfo->totalSectors, header);
 
@@ -517,7 +544,7 @@ make_hfsplus(const DriveInfo *driveInfo, hfsparams_t *defaults)
 	
 
 	/*--- WRITE FILE ATTRIBUTES B-TREE TO DISK:  */
-	if (defaults->attributesClumpSize) {
+	if (defaults->attributesInitialSize) {
 
 		btNodeSize = defaults->attributesNodeSize;
 		sectorsPerNode = btNodeSize/kBytesPerSector;
@@ -685,7 +712,7 @@ InitVH(hfsparams_t *defaults, UInt64 sectors, HFSPlusVolumeHeader *hp)
 	hp->rsrcClumpSize = defaults->rsrcClumpSize;
 	hp->dataClumpSize = defaults->dataClumpSize;
 	hp->nextCatalogID = defaults->nextFreeFileID;
-	hp->encodingsBitmap = 1 | (1 << ENCODING_TO_BIT(defaults->encodingHint));
+	hp->encodingsBitmap = 1;
 
 	/* set up allocation bitmap file */
 	hp->allocationFile.clumpSize = defaults->allocationClumpSize;
@@ -739,8 +766,8 @@ InitVH(hfsparams_t *defaults, UInt64 sectors, HFSPlusVolumeHeader *hp)
 
 	/* set up extents b-tree file */
 	hp->extentsFile.clumpSize = defaults->extentsClumpSize;
-	hp->extentsFile.logicalSize = defaults->extentsClumpSize;
-	hp->extentsFile.totalBlocks = defaults->extentsClumpSize / blockSize;
+	hp->extentsFile.logicalSize = defaults->extentsInitialSize;
+	hp->extentsFile.totalBlocks = defaults->extentsInitialSize / blockSize;
 	if (NEWFS_HFS_DEBUG && defaults->extentsStartBlock)
 		allocateBlock = defaults->extentsStartBlock;
 	else {
@@ -755,10 +782,10 @@ InitVH(hfsparams_t *defaults, UInt64 sectors, HFSPlusVolumeHeader *hp)
 		printf ("extentsFile   : (%10u, %10u)\n", hp->extentsFile.extents[0].startBlock, hp->extentsFile.totalBlocks);
 
 	/* set up attributes b-tree file */
-	if (defaults->attributesClumpSize) {
+	if (defaults->attributesInitialSize) {
 		hp->attributesFile.clumpSize = defaults->attributesClumpSize;
-		hp->attributesFile.logicalSize = defaults->attributesClumpSize;
-		hp->attributesFile.totalBlocks = defaults->attributesClumpSize / blockSize;
+		hp->attributesFile.logicalSize = defaults->attributesInitialSize;
+		hp->attributesFile.totalBlocks = defaults->attributesInitialSize / blockSize;
 		if (NEWFS_HFS_DEBUG && defaults->attributesStartBlock)
 			allocateBlock = defaults->attributesStartBlock;
 		else {
@@ -781,8 +808,8 @@ InitVH(hfsparams_t *defaults, UInt64 sectors, HFSPlusVolumeHeader *hp)
 
 	/* set up catalog b-tree file */
 	hp->catalogFile.clumpSize = defaults->catalogClumpSize;
-	hp->catalogFile.logicalSize = defaults->catalogClumpSize;
-	hp->catalogFile.totalBlocks = defaults->catalogClumpSize / blockSize;
+	hp->catalogFile.logicalSize = defaults->catalogInitialSize;
+	hp->catalogFile.totalBlocks = defaults->catalogInitialSize / blockSize;
 	if (NEWFS_HFS_DEBUG && defaults->catalogStartBlock)
 		allocateBlock = defaults->catalogStartBlock;
 	else {
@@ -935,10 +962,15 @@ MarkExtentUsed(const DriveInfo *driveInfo,
 	       UInt32 blockCount)
 {
 	size_t bufSize = driveInfo->physSectorSize;
-	uint8_t buf[bufSize];
+	void *buf;
 	uint32_t blocksLeft = blockCount;
 	uint32_t curBlock = startBlock;
 	static const int kBitsPerByte = 8;
+	int status = -1;
+
+	buf = valloc(bufSize);
+	if (buf == NULL)
+		err(1, NULL);
 
 	/*
 	 * We loop through physSectorSize blocks.
@@ -982,12 +1014,12 @@ MarkExtentUsed(const DriveInfo *driveInfo,
 		if (nbytes < (ssize_t)bufSize) {
 			if (nbytes == -1)
 				err(1, "%s::pread(%d, %p, %zu, %lld)", __FUNCTION__, driveInfo->fd, buf, bufSize, offset);
-			return -1;
+			goto exit;
 		}
 
 		if (AllocateExtent(buf, blockOffset, numBlocks) == -1) {
 			warnx("In-use allocation block in <%u, %u>", blockOffset, numBlocks);
-			return -1;
+			goto exit;
 		}
 		nwritten = pwrite(driveInfo->fd, buf, bufSize, offset);
 		/*
@@ -996,14 +1028,19 @@ MarkExtentUsed(const DriveInfo *driveInfo,
 		 * means a return value of 0 or -1, neither of which I could do anything about.
 		 */
 		if (nwritten != (ssize_t)bufSize)
-			return -1;
+			goto exit;
 
 		// And go get the next set, if needed
 		blocksLeft -= numBlocks;
 		curBlock += numBlocks;
 	}
 
-	return 0;
+	status = 0;
+
+exit:
+	free(buf);
+
+	return status;
 }
 /*
  * WriteExtentsFile
@@ -1028,7 +1065,7 @@ WriteExtentsFile(const DriveInfo *driveInfo, UInt64 startingSector,
 	SInt16			offset;
 
 	*mapNodes = 0;
-	fileSize = dp->extentsClumpSize;
+	fileSize = dp->extentsInitialSize;
 	nodeSize = dp->extentsNodeSize;
 
 	bzero(buffer, nodeSize);
@@ -1062,7 +1099,7 @@ WriteExtentsFile(const DriveInfo *driveInfo, UInt64 startingSector,
 	bthp->nodeSize		= SWAP_BE16 (nodeSize);
 	bthp->totalNodes	= SWAP_BE32 (fileSize / nodeSize);
 	bthp->freeNodes		= SWAP_BE32 (SWAP_BE32 (bthp->totalNodes) - (numOverflowExtents ? 2 : 1));  /* header */
-	bthp->clumpSize		= SWAP_BE32 (fileSize);
+	bthp->clumpSize		= SWAP_BE32 (dp->extentsClumpSize);
 
 	bthp->attributes |= SWAP_BE32 (kBTBigKeysMask);
 	bthp->maxKeyLength = SWAP_BE16 (kHFSPlusExtentKeyMaximumLength);
@@ -1174,7 +1211,7 @@ WriteAttributesFile(const DriveInfo *driveInfo, UInt64 startingSector,
 	int	set_cp_level = 0;
 
 	*mapNodes = 0;
-	fileSize = dp->attributesClumpSize;
+	fileSize = dp->attributesInitialSize;
 	nodeSize = dp->attributesNodeSize;
 
 #ifdef DEBUG_BUILD
@@ -1229,7 +1266,7 @@ WriteAttributesFile(const DriveInfo *driveInfo, UInt64 startingSector,
 		/* Take the header into account */
 		bthp->freeNodes		= SWAP_BE32 (SWAP_BE32 (bthp->totalNodes) - 1);
 	}
-	bthp->clumpSize		= SWAP_BE32 (fileSize);
+	bthp->clumpSize		= SWAP_BE32 (dp->attributesClumpSize);
 
 	bthp->attributes |= SWAP_BE32 (kBTBigKeysMask | kBTVariableIndexKeysMask);
 	bthp->maxKeyLength = SWAP_BE16 (kHFSPlusAttrKeyMaximumLength);
@@ -1436,6 +1473,24 @@ WriteJournalInfo(const DriveInfo *driveInfo, UInt64 startingSector,
     jibp->offset = SWAP_BE64(jibp->offset);
     jibp->size   = SWAP_BE64(jibp->size);
 
+	if (jibp->flags & kJIJournalInFSMask) {
+		/* 
+		 * Zero out the on-disk content of the journal file.
+		 *
+		 * This is a really ugly hack.  Right now, all of the logic in the code
+		 * that calls us (make_hfsplus), uses the value 'sectorsPerBlock' but it
+		 * is really hardcoded to assume the sector size is 512 bytes.  The code
+		 * in WriteBuffer will massage the I/O to use the actual physical sector
+		 * size.   Since WriteBuffer takes a sector # relative to 512 byte sectors,
+		 * We need to convert the journal offset in bytes to value that represents
+		 * its start LBA in 512 byte sectors.
+		 * 
+		 * Note further that we swapped to big endian prior to the WriteBuffer call,
+		 * but we have swapped back to native after the call.
+		 */
+		WriteBuffer(driveInfo, jibp->offset / kBytesPerSector, jibp->size, NULL);
+	}
+
     return 0;
 }
 
@@ -1463,7 +1518,7 @@ WriteCatalogFile(const DriveInfo *driveInfo, UInt64 startingSector,
 	SInt16			offset;
 
 	*mapNodes = 0;
-	fileSize = dp->catalogClumpSize;
+	fileSize = dp->catalogInitialSize;
 	nodeSize = dp->catalogNodeSize;
 
 	bzero(buffer, nodeSize);
@@ -1488,7 +1543,7 @@ WriteCatalogFile(const DriveInfo *driveInfo, UInt64 startingSector,
 	bthp->nodeSize		= SWAP_BE16 (nodeSize);
 	bthp->totalNodes	= SWAP_BE32 (fileSize / nodeSize);
 	bthp->freeNodes		= SWAP_BE32 (SWAP_BE32 (bthp->totalNodes) - 2);  /* header and root */
-	bthp->clumpSize		= SWAP_BE32 (fileSize);
+	bthp->clumpSize		= SWAP_BE32 (dp->catalogClumpSize);
 
 
 	bthp->attributes	|= SWAP_BE32 (kBTVariableIndexKeysMask + kBTBigKeysMask);
@@ -1560,7 +1615,7 @@ InitCatalogRoot_HFSPlus(const hfsparams_t *dp, const HFSPlusVolumeHeader *header
 	UInt16					nodeSize;
 	SInt16					offset;
 	size_t					unicodeBytes;
-	UInt8 canonicalName[256];
+	UInt8 canonicalName[kHFSPlusMaxFileNameBytes];	// UTF8 character may convert to three bytes, plus a NUL
 	CFStringRef cfstr;
 	Boolean	cfOK;
 	int index = 0;
@@ -1617,7 +1672,7 @@ InitCatalogRoot_HFSPlus(const hfsparams_t *dp, const HFSPlusVolumeHeader *header
 	cdp->folderID		= SWAP_BE32 (kHFSRootFolderID);
 	cdp->createDate		= SWAP_BE32 (dp->createDate);
 	cdp->contentModDate	= SWAP_BE32 (dp->createDate);
-	cdp->textEncoding	= SWAP_BE32 (dp->encodingHint);
+	cdp->textEncoding	= SWAP_BE32 (kTextEncodingMacUnicode);
 	if (dp->flags & kUseAccessPerms) {
 		cdp->bsdInfo.ownerID  = SWAP_BE32 (dp->owner);
 		cdp->bsdInfo.groupID  = SWAP_BE32 (dp->group);
@@ -1952,33 +2007,6 @@ static UInt32 UTCToLocal(UInt32 utcTime)
         return (localTime);
 }
 
-#define __kCFUserEncodingFileName ("/.CFUserTextEncoding")
-
-static UInt32
-GetDefaultEncoding()
-{
-    struct passwd *passwdp;
-
-    if ((passwdp = getpwuid(0))) { // root account
-        char buffer[MAXPATHLEN + 1];
-        int fd;
-
-        strlcpy(buffer, passwdp->pw_dir, sizeof(buffer));
-        strlcat(buffer, __kCFUserEncodingFileName, sizeof(buffer));
-
-        if ((fd = open(buffer, O_RDONLY, 0)) > 0) {
-            ssize_t readSize;
-
-            readSize = read(fd, buffer, MAXPATHLEN);
-            buffer[(readSize < 0 ? 0 : readSize)] = '\0';
-            close(fd);
-            return strtol(buffer, NULL, 0);
-        }
-    }
-    return 0;
-}
-
-
 static int
 ConvertUTF8toUnicode(const UInt8* source, size_t bufsize, UniChar* unibuf,
 	UInt16 *charcount)
@@ -2037,33 +2065,6 @@ ConvertUTF8toUnicode(const UInt8* source, size_t bufsize, UniChar* unibuf,
 
 	return (0);
 }
-
-/*
- * Derive the encoding hint for the given name.
- */
-static int
-getencodinghint(unsigned char *name)
-{
-        int mib[3];
-        size_t buflen = sizeof(int);
-        struct vfsconf vfc;
-        int hint = 0;
-
-        if (getvfsbyname("hfs", &vfc) < 0)
-		goto error;
-
-        mib[0] = CTL_VFS;
-        mib[1] = vfc.vfc_typenum;
-        mib[2] = HFS_ENCODINGHINT;
- 
-	if (sysctl(mib, 3, &hint, &buflen, name, strlen((char *)name) + 1) < 0)
- 		goto error;
-	return (hint);
-error:
-	hint = GetDefaultEncoding();
-	return (hint);
-}
-
 
 /* Generate Volume UUID - similar to code existing in hfs_util */
 void GenerateVolumeUUID(VolumeUUID *newVolumeID) {

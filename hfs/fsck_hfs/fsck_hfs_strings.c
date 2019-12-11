@@ -130,7 +130,7 @@ hfs_errors[] = {
     { E_FreeBlocks,             "Invalid volume free block count",                              fsckMsgError,   fsckLevel1,   0, },
     { E_MDBDamaged,             "Master Directory Block needs minor repair",                    fsckMsgError,   fsckLevel1,   0, },
     { E_VolumeHeaderDamaged,    "Volume header needs minor repair",                             fsckMsgError,   fsckLevel1,   0, },
-    { E_VBMDamaged,             "Volume bitmap needs minor repair for under-allocation",        fsckMsgError,   fsckLevel1,   0, },
+    { E_VBMDamaged,             "Volume bitmap needs repair for under-allocation",              fsckMsgError,   fsckLevel0,   0, },
     { E_InvalidNodeSize,        "Invalid B-tree node size",                                     fsckMsgError,   fsckLevel1,   0, },
     { E_LeafCnt,                "Invalid leaf record count",                                    fsckMsgError,   fsckLevel1,   0, },
     { E_BadValue,               "(It should be %s instead of %s)",                              fsckMsgDamageInfo,fsckLevel1, 2, (const int[]){ fsckTypeString, fsckTypeString } },
@@ -168,7 +168,7 @@ hfs_errors[] = {
     { E_DirInodeBadName,        "Invalid name for directory inode (id = %u)",                   fsckMsgError,   fsckLevel1,   1, (const int[]){ fsckTypeInt, } },
     { E_DirHardLinkChain,       "Incorrect number of directory hard links",                     fsckMsgError,   fsckLevel1,   0, },
     { E_DirHardLinkOwnerFlags,  "Incorrect owner flags for directory hard link (id = %u)",      fsckMsgError,   fsckLevel1,   1, (const int[]){ fsckTypeInt } },
-    { E_DirHardLinkFinderInfo,  "Invalid finder info for directory hard link (id = %u)",        fsckMsgError,   fsckLevel1,   1, (const int[]){ fsckTypeInt } },
+    { E_DirHardLinkFinderInfo,  "Invalid Finder info for directory hard link (id = %u)",        fsckMsgError,   fsckLevel1,   1, (const int[]){ fsckTypeInt } },
     { E_DirLinkAncestorFlags,   "Incorrect flags for directory hard link ancestor (id = %u)",   fsckMsgError,   fsckLevel1,   1, (const int[]){ fsckTypeInt } },
 
     /* 590 - 599 */
@@ -181,7 +181,7 @@ hfs_errors[] = {
     { E_FileInodeBadParent,     "Invalid parent for file inode (id = %u)",                      fsckMsgError,   fsckLevel1,   1, (const int[]){ fsckTypeInt, } },
     { E_FileInodeBadName,       "Invalid name for file inode (id = %u)",                        fsckMsgError,   fsckLevel1,   1, (const int[]){ fsckTypeInt, } },
     { E_FileHardLinkChain,      "Incorrect number of file hard links",                          fsckMsgError,   fsckLevel1,   0, },
-    { E_FileHardLinkFinderInfo, "Invalid finder info for file hard link (id = %u)",             fsckMsgError,   fsckLevel1,   1, (const int[]){ fsckTypeInt, } },
+    { E_FileHardLinkFinderInfo, "Invalid Finder info for file hard link (id = %u)",             fsckMsgError,   fsckLevel1,   1, (const int[]){ fsckTypeInt, } },
 
     /* 600 - 609 */
     { E_InvalidLinkChainFirst,  "Invalid first link in hard link chain (id = %u)",              fsckMsgError,   fsckLevel1,   1, (const int[]){ fsckTypeInt, } },

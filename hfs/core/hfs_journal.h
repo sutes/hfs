@@ -1,6 +1,5 @@
-
 /*
- * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -32,8 +31,8 @@
  * to be modified by user code.  Just use the functions and do
  * not mess around with the structs.
  */ 
-#ifndef _SYS_VFS_JOURNAL_H_
-#define _SYS_VFS_JOURNAL_H_
+#ifndef HFS_JOURNAL_H_
+#define HFS_JOURNAL_H_
 
 #include <sys/appleapiopts.h>
 #include <sys/cdefs.h>
@@ -187,6 +186,7 @@ typedef struct journal {
     volatile off_t      old_start[16];     // this is how we do lazy start update
 
     int                 last_flush_err;    // last error from flushing the cache
+    uint32_t            flush_counter;     // a monotonically increasing value assigned on track cache flush
 } journal;
 
 /* internal-only journal flags (top 16 bits) */
@@ -196,6 +196,7 @@ typedef struct journal {
 #define JOURNAL_NEED_SWAP         0x00080000   // swap any data read from disk
 #define JOURNAL_DO_FUA_WRITES     0x00100000   // do force-unit-access writes
 #define JOURNAL_USE_UNMAP         0x00200000   // device supports UNMAP (TRIM)
+#define JOURNAL_FEATURE_BARRIER   0x00400000   // device supports barrier-only flush
 
 
 /* journal_open/create options are always in the low-16 bits */
@@ -327,20 +328,26 @@ int   journal_modify_block_start(journal *jnl, struct buf *bp);
 int   journal_modify_block_abort(journal *jnl, struct buf *bp);
 int   journal_modify_block_end(journal *jnl, struct buf *bp, void (*func)(struct buf *bp, void *arg), void *arg);
 int   journal_kill_block(journal *jnl, struct buf *bp);
-#ifdef BSD_KERNEL_PRIVATE
 int   journal_trim_add_extent(journal *jnl, uint64_t offset, uint64_t length);
 int   journal_trim_remove_extent(journal *jnl, uint64_t offset, uint64_t length);
 void  journal_trim_set_callback(journal *jnl, jnl_trim_callback_t callback, void *arg);
 int   journal_trim_extent_overlap (journal *jnl, uint64_t offset, uint64_t length, uint64_t *end);
 /* Mark state in the journal that requests an immediate journal flush upon txn completion */
-int		journal_request_immediate_flush (journal *jnl);
-#endif
+int   journal_request_immediate_flush (journal *jnl);
 int   journal_end_transaction(journal *jnl);
 
 int   journal_active(journal *jnl);
-int   journal_flush(journal *jnl, boolean_t wait_for_IO);
+
+typedef enum journal_flush_options {
+	JOURNAL_WAIT_FOR_IO       = 0x01,   // Flush journal and metadata blocks, wait for async IO to complete.
+	JOURNAL_FLUSH_FULL        = 0x02,   // Flush track cache to media
+} journal_flush_options_t;
+
+int   journal_flush(journal *jnl, journal_flush_options_t options);
 void *journal_owner(journal *jnl);    // compare against current_thread()
 int   journal_uses_fua(journal *jnl);
+void  journal_lock(journal *jnl);
+void  journal_unlock(journal *jnl);
 
 
 /*
@@ -363,7 +370,9 @@ int   journal_uses_fua(journal *jnl);
 int journal_relocate(journal *jnl, off_t offset, off_t journal_size, int32_t tbuffer_size,
 	errno_t (*callback)(void *), void *callback_arg);
 
+uint32_t journal_current_txn(journal *jnl);
+
 __END_DECLS
 
 #endif /* __APPLE_API_UNSTABLE */
-#endif /* !_SYS_VFS_JOURNAL_H_ */
+#endif /* !HFS_JOURNAL_H_ */

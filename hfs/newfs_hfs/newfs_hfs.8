@@ -33,6 +33,7 @@
 .Op Fl c Ar clump-size-list
 .Op Fl i Ar first-cnid
 .Op Fl J Ar [journal-size]
+.Op Fl D Ar journal-device
 .Op Fl n Ar node-size-list
 .Op Fl v Ar volume-name
 .Ar special
@@ -48,6 +49,7 @@
 .Op Fl c Ar clump-size-list
 .Op Fl i Ar first-cnid
 .Op Fl J Ar [journal-size]
+.Op Fl D Ar journal-device
 .Op Fl n Ar node-size-list
 .Op Fl v Ar volume-name
 .Sh DESCRIPTION
@@ -137,11 +139,34 @@ Set the resource fork clump size.
 .It Fl i Ar first-cnid
 This specifies the initial catalog node ID for user files
 and directories. The default value is 16.
+.It Fl I Ar initial-size-list
+This specifies the
+.Em initial
+size, in allocation
+blocks, for the various metadata files.
+.Em Initial
+sizes are specified with the
+.Fl I
+option followed by a comma
+separated list of the form arg=blocks.
+.Pp
+Example:  -I c=5000,e=500
+.Bl -tag -width Fl
+.It Em a=blocks
+Set the initial attribute file size.
+.It Em c=blocks
+Set the initial catalog file size.
+.It Em e=blocks
+Set the initial extent overflow file size.
+.El
 .It Fl J Ar [journal-size]
 Creates a journaled HFS+ volume.
 The default journal size varies, based on the size of the volume.  Appending an 'M' to the
 journal size implies megabytes (i.e. 64M is 64 megabytes).
 The maximum journal size is 1024 megabytes.
+.It Fl D Ar journal-device
+Creates the journal on special device
+.Em journal-device.
 .It Fl n Ar node-size-list
 This specifies the b-tree
 .Em node

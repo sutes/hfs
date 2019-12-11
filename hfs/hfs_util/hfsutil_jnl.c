@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 1999-2015 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -44,7 +44,10 @@
 #include <hfs/hfs_format.h>
 #include <hfs/hfs_mount.h>    /* for hfs sysctl values */
 
-#include <System/hfs/hfs_fsctl.h>
+#include "../core/hfs_fsctl.h"
+
+#include <System/sys/content_protection.h>
+#include <TargetConditionals.h>
 
 #include <errno.h>
 #include <fcntl.h>
@@ -343,7 +346,7 @@ static const char *jib_fname = ".journal_info_block";
 int 
 DoMakeJournaled(char *volname, int jsize) {
 	int              fd, i, block_size, journal_size = 8*1024*1024;
-	char            *buf;
+	char            *buf = NULL;
 	int              ret;
 	fstore_t         fst;
 	int32_t          jstart_block, jinfo_block;
@@ -411,7 +414,11 @@ DoMakeJournaled(char *volname, int jsize) {
 	}
 	// printf("Embedded offset == 0x%llx\n", embedded_offset);
 
-	fd = open(journal_fname, O_CREAT|O_TRUNC|O_RDWR, 000);
+	/* 
+	 * Must use open_dprotected_np to create a class D file.  This will
+	 * be the same as standard open(2) on systems that do not support content protection
+	 */
+	fd = open_dprotected_np (journal_fname, O_CREAT|O_TRUNC|O_RDWR, PROTECTION_CLASS_D, 0, 000);
 	if (fd < 0) {
 		fprintf(stderr, "Can't create journal file on volume %s (%s)\n",
 				volname, strerror(errno));
@@ -491,6 +498,8 @@ retry:
 		fprintf(stderr, "Failed to get start block for %s (%s)\n",
 				journal_fname, strerror(errno));
 		unlink(journal_fname);
+		if (buf) 
+			free(buf);
 		return 20;
 	}
 	jstart_block = (start_block / block_size) - (embedded_offset / block_size);
@@ -500,17 +509,25 @@ retry:
 	jib.offset = (off_t)((unsigned int)jstart_block) * (off_t)((unsigned int)block_size);
 	jib.size   = (off_t)((unsigned int)journal_size);
 
-	fd = open(jib_fname, O_CREAT|O_TRUNC|O_RDWR, 000);
+	/* 
+	 * Use open_dprotected_np to create JIB as a class D file.  This will
+	 * behave the same as a standard open(2) on systems that do not support content protection
+	 */
+	fd = open_dprotected_np(jib_fname, O_CREAT|O_TRUNC|O_RDWR, PROTECTION_CLASS_D, 0, 000);
 	if (fd < 0) {
 		fprintf(stderr, "Could not create journal info block file on volume %s (%s)\n",
 				volname, strerror(errno));
 		unlink(journal_fname);
+		if (buf)
+			free(buf);
 		return 5;
 	}
 
 	if (fcntl(fd, F_NOCACHE, 1)) {
 		fprintf(stderr, "Could not create journal info block (NC) file on volume %s (%s)\n",
 				volname, strerror(errno));
+		if (buf)
+			free(buf);
 		return 5;	
 	} 
 
@@ -530,6 +547,8 @@ retry:
 		fprintf(stderr, "Failed to write journal info block on volume %s (%s)!\n",
 				volname, strerror(errno));
 		unlink(journal_fname);
+		if (buf)
+			free(buf);
 		return 10;
 	}
 
@@ -543,6 +562,8 @@ retry:
 				jib_fname, strerror(errno));
 		unlink(journal_fname);
 		unlink(jib_fname);
+		if (buf)
+			free(buf);
 		return 20;
 	}
 	jinfo_block = (start_block / block_size) - (embedded_offset / block_size);
@@ -570,9 +591,13 @@ retry:
 				volname, strerror(errno));
 		unlink(journal_fname);
 		unlink(jib_fname);
+		if (buf)
+			free(buf);
 		return 20;
 	}
 
+	if (buf)
+		free(buf);
 	return 0;
 }
 

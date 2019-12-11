@@ -61,6 +61,37 @@
 #include <mntopts.h>
 
 
+/*
+ * Replay the journal.  We don't care if there are problems.
+ */
+static void
+replay_journal(const char *device)
+{
+	struct vfsconf vfc;
+	int mib[4];
+	int fd = -1;
+
+	fd = open(device, O_RDWR);
+	if (fd == -1) {
+		warn("Could not open block device %s for writing", device);
+		goto done;
+	}
+	if (getvfsbyname("hfs", &vfc) != 0) {
+		warn("Could not get hfs vfs information");
+		goto done;
+	}
+	mib[0] = CTL_VFS;
+	mib[1] = vfc.vfc_typenum;
+	mib[2] = HFS_REPLAY_JOURNAL;
+	mib[3] = fd;
+	(void)sysctl(mib, 4, NULL, NULL, NULL, 0);
+
+done:
+	if (fd != -1)
+		close(fd);
+	return;
+}
+
 struct mntopt mopts[] = {
 	MOPT_STDOPTS,
 	MOPT_IGNORE_OWNERSHIP,
@@ -101,7 +132,7 @@ typedef struct CreateDateAttrBuf {
 
 #define KEXT_LOAD_COMMAND	"/sbin/kextload"
 
-#define ENCODING_MODULE_PATH	"/System/Library/Filesystems/hfs.fs/Encodings/"
+#define ENCODING_MODULE_PATH	"/System/Library/Filesystems/hfs.fs/Contents/Resources/Encodings/"
 
 #define MXENCDNAMELEN	16	/* Maximun length of encoding name string */
 
@@ -423,6 +454,8 @@ main(argc, argv)
 	u_int32_t localCreateTime;
 	struct hfs_mnt_encoding *encp;
 
+	int do_rekey = 0;
+	int tmp_mntflags = 0;
 #if TARGET_OS_EMBEDDED
 	mntflags = MNT_NOATIME;
 #else
@@ -601,6 +634,7 @@ main(argc, argv)
 		if (args.hfs_mask == (mode_t)VNOVAL)
 			args.hfs_mask = sb.st_mode & (S_IRWXU | S_IRWXG | S_IRWXO);
 	}
+
 #if DEBUG
     printf("mount_hfs: calling mount: \n" );
     printf("\tdevice = %s\n", dev);
@@ -615,45 +649,44 @@ main(argc, argv)
 #endif
 
 #if !TARGET_OS_EMBEDDED
-	/*
-	* We shouldn't really be calling up to other layers, but
-	* an exception was made in this case to fix the situation
-	* where HFS was writable on optical media.
-	*/
-
-    	if ((_optical_is_writable(dev) & _OPTICAL_WRITABLE_PACKET)) {
-		mntflags |= MNT_RDONLY;
-    	}
+    /*
+     * We shouldn't really be calling up to other layers, but
+     * an exception was made in this case to fix the situation
+     * where HFS was writable on optical media.
+     */
+    
+    if ((_optical_is_writable(dev) & _OPTICAL_WRITABLE_PACKET)) {
+	    mntflags |= MNT_RDONLY;
+    }
 #endif
 	
-	if (is_hfs_std)
-		mntflags |= MNT_RDONLY;
-
-	if ((mntflags & MNT_RDONLY) == 0) {
-		/*
-		 * get the volume's create date so we can synchronize
-		 * it with the root directory create date
-		 */
-		localCreateTime = getVolumeCreateDate(dev);
-	}
-	else {
-		localCreateTime = 0;
-	}
-
+    if (is_hfs_std)
+	    mntflags |= MNT_RDONLY;
+    
+    if ((mntflags & MNT_RDONLY) == 0) {
+	    /*
+	     * get the volume's create date so we can synchronize
+	     * it with the root directory create date
+	     */
+	    localCreateTime = getVolumeCreateDate(dev);
+    }
+    else {
+	    localCreateTime = 0;
+    }
+    
     if ((mountStatus = mount(HFS_MOUNT_TYPE, dir, mntflags, &args)) < 0) {
-#if DEBUG
-        printf("mount_hfs: error on mount(): error = %d.\n", mountStatus);
-#endif
-        err(1, NULL);
-        };
-   
-	/*
-	 * synchronize the root directory's create date
-	 * with the volume's create date
-	 */
-	if (localCreateTime)
-		syncCreateDate(dir, localCreateTime);
-
+	    printf("mount_hfs: error on mount(): error = %d.\n", mountStatus);
+	    err(1, NULL);
+    };
+    
+    /*
+     * synchronize the root directory's create date
+     * with the volume's create date
+     */
+    if (localCreateTime)
+	    syncCreateDate(dir, localCreateTime);
+    
+    
     exit(0);
 }
 
@@ -859,7 +892,6 @@ usage()
 {
 	(void)fprintf(stderr,
                "usage: mount_hfs [-xw] [-u user] [-g group] [-m mask] [-e encoding] [-t tbuffer-size] [-j] [-c] [-o options] special-device filesystem-node\n");
-	(void)fprintf(stderr, "   -j disables journaling; -c disables group-commit for journaling\n");
 	
 	exit(1);
 }
